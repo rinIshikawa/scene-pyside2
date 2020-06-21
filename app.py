@@ -1,13 +1,19 @@
 import sys
+import math
+import glfw
+import pickle
 
 from PySide2 import QtCore, QtWidgets, QtOpenGL, QtGui
 from PySide2.QtCore import Qt, Slot
-from PySide2.QtGui import QPainter
+from PySide2.QtGui import QPainter, QKeyEvent, QOpenGLShaderProgram
 from PySide2.QtWidgets import (QAction, QApplication, QHeaderView, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QPushButton, QTableWidget, QTableWidgetItem,
-                               QVBoxLayout, QWidget, QListWidget, QListWidgetItem)
+                               QVBoxLayout, QWidget, QListWidget, QListWidgetItem, QOpenGLWidget)
 from PySide2.QtCharts import QtCharts
-
+from pyrr import Vector3, vector, vector3, matrix44
+from ObjLoader import ObjLoader
+from shader import Shader
+from glmatrix import *
 
 try:
     from OpenGL.GL import *
@@ -20,129 +26,8 @@ except ImportError:
     messageBox.exec_()
     sys.exit(1)
 
-
-class GLWidget(QtOpenGL.QGLWidget):
-    x_rotation_changed = QtCore.Signal(int)
-    y_rotation_changed = QtCore.Signal(int)
-    z_rotation_changed = QtCore.Signal(int)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.shape1 = None
-        self.x_rot_speed = 0
-        self.x_shape_rot = 0
-        self.y_rot_speed = 0
-        self.y_shape_rot = 0
-        self.z_rot_speed = 0
-        self.z_shape_rot = 0
-
-        timer = QtCore.QTimer(self)
-        timer.timeout.connect(self.advance)
-        timer.start(20)
-
-    def initializeGL(self):
-        """Set up the rendering context, define display lists etc."""
-        glEnable(GL_DEPTH_TEST)
-        self.shape1 = self.make_shape()
-        glEnable(GL_NORMALIZE)
-        glClearColor(0.0, 0.0, 0.0, 1.0)
-
-    def paintGL(self):
-        """draw the scene:"""
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glPushMatrix()
-        self.draw_shape(self.shape1, -1.0, -1.0, 0.0,
-            (self.x_shape_rot, self.y_shape_rot, self.z_shape_rot))
-        glPopMatrix()
-
-    def resizeGL(self, width, height):
-        """setup viewport, projection etc."""
-        side = min(width, height)
-        if side < 0:
-            return
-
-        glViewport(int((width - side) / 2), int((height - side) / 2), side, side)
-
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        glFrustum(-1.2, +1.2, -1.2, 1.2, 6.0, 70.0)
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-        glTranslated(0.0, 0.0, -20.0)
-
-    def free_resources(self):
-        """Helper to clean up resources."""
-        self.makeCurrent()
-        glDeleteLists(self.shape1, 1)
-
-    # slots
-    def set_x_rot_speed(self, speed):
-        self.x_rot_speed = speed
-        self.updateGL()
-
-    def set_y_rot_speed(self, speed):
-        self.y_rot_speed = speed
-        self.updateGL()
-
-    def set_z_rot_speed(self, speed):
-        self.z_rot_speed = speed
-        self.updateGL()
-
-    def advance(self):
-        """Used in timer to actually rotate the shape."""
-        self.x_shape_rot += self.x_rot_speed
-        self.x_shape_rot %= 360
-        self.y_shape_rot += self.y_rot_speed
-        self.y_shape_rot %= 360
-        self.z_shape_rot += self.z_rot_speed
-        self.z_shape_rot %= 360
-        self.updateGL()
-
-    def make_shape(self):
-        """Helper to create the shape and return list of resources."""
-        list = glGenLists(1)
-        glNewList(list, GL_COMPILE)
-
-        glNormal3d(0.0, 0.0, 0.0)
-
-        # Vertices
-        a = ( 1, -1, -1),
-        b = ( 1,  1, -1),
-        c = (-1,  1, -1),
-        d = (-1, -1, -1),
-        e = ( 1, -1,  1),
-        f = ( 1,  1,  1),
-        g = (-1, -1,  1),
-        h = (-1,  1,  1)
-
-        edges = [
-            (a, b), (a, d), (a, e),
-            (c, b), (c, d), (c, h),
-            (g, d), (g, e), (g, h),
-            (f, b), (f, e), (f, h)
-        ]
-
-        glBegin(GL_LINES)
-        for edge in edges:
-            glVertex3fv(edge[0])
-            glVertex3fv(edge[1])
-        glEnd()
-
-        glEndList()
-
-        return list
-
-    def draw_shape(self, shape, dx, dy, dz, rotation):
-        """Helper to translate, rotate and draw the shape."""
-        glPushMatrix()
-        glTranslated(dx, dy, dz)
-        glRotated(rotation[0], 1.0, 0.0, 0.0)
-        glRotated(rotation[1], 0.0, 1.0, 0.0)
-        glRotated(rotation[2], 0.0, 0.0, 1.0)
-        glCallList(shape)
-        glPopMatrix()
-
-
+from OpenGL.GL.shaders import compileProgram, compileShader
+from glWidget import GLWidget
 
 class Geometry:
     def __init__(self, geometry):
@@ -154,9 +39,11 @@ class Geometry:
         self.rotation = [0, 0, 0]
         self.translation = [0, 0, 0]
 
-
     def get_name(self):
         return self.name
+
+    def get_geometry(self):
+        return self.geometry
 
     def get_color(self):
         return self.color
@@ -192,7 +79,7 @@ class Geometry:
         self.translation = translation
 
     def __repr__(self):
-        return f'{self.name} {self.color} {self.pos}'
+        return f'{self.name} {self.color}'
 
 
 class Widget(QWidget):
@@ -200,8 +87,19 @@ class Widget(QWidget):
         QWidget.__init__(self)
         self.items = 0
 
-        # Example data
         self.object_list = []
+        try:
+            f = open('cache','rb')
+            self.object_list = pickle.load(f)
+            print(self.object_list)
+            f.close()
+
+            for obj in self.object_list:
+                print(obj)
+        except:
+            print("loading error")
+
+
         self.current_object = None
         self.current_item = None
 
@@ -244,8 +142,8 @@ class Widget(QWidget):
 
         self.right.addWidget(QLabel("name"))
         self.right.addWidget(self.name)
-        self.right.addWidget(QLabel("position (x, y, z)"))
-        self.right.addWidget(self.position)
+        # self.right.addWidget(QLabel("position (x, y, z)"))
+        # self.right.addWidget(self.position)
         self.right.addWidget(QLabel("scale (x, y, z)"))
         self.right.addWidget(self.scale)
         self.right.addWidget(QLabel("rotation (x, y, z)"))
@@ -277,7 +175,58 @@ class Widget(QWidget):
         self.rotation.textChanged[str].connect(self.change_rotation)
         self.translation.textChanged[str].connect(self.change_translation)
         self.color.textChanged[str].connect(self.change_color)
+        self.keyDownEvent = QKeyEvent(QKeyEvent.KeyPress, 10, Qt.NoModifier, '', False, 1)
+        # self.keyUpEvent = QKeyEvent(QKeyEvent.KeyRelease, 10, Qt.NoModifier, '', False, 1)
 
+        self.glWidget.setObjList(self.object_list)
+        self.glWidget.updateGL()
+
+
+    def keyPressEvent(self, e):
+        print("pressed some key")
+        print(e.key())
+
+        # 'W'
+        if e.key() == 87:
+            print('W up?')
+            self.glWidget.camPosition[2] -= 0.1
+
+        # 'S'
+        elif e.key() == 83:
+            print('S up?')
+            self.glWidget.camPosition[2] += 0.1
+
+        # 'A'
+        elif e.key() == 65:
+            print('A up?')
+            self.glWidget.camPosition[0] += 0.1
+
+        # 'D'
+        elif e.key() == 68:
+            print('D up?')
+            self.glWidget.camPosition[0] -= 0.1
+
+        # 'Q'
+        elif e.key() == 81:
+            print('Q up?')
+            quat_rotateY(self.glWidget.camRotation, self.glWidget.camRotation, -0.1)
+        # 'E'
+        elif e.key() == 69:
+            print('E up?')
+            quat_rotateY(self.glWidget.camRotation, self.glWidget.camRotation, 0.1)
+
+        # 'R'
+        elif e.key() == 82:
+            print('R up?')
+            self.glWidget.camPosition[1] -= 0.1
+
+        # 'F'
+        elif e.key() == 70:
+            print('F up?')
+            self.glWidget.camPosition[1] += 0.1
+
+
+        self.glWidget.updateGL()
 
     @Slot()
     def add_cube(self):
@@ -288,6 +237,10 @@ class Widget(QWidget):
         item.setData(QtCore.Qt.UserRole, cube)
 
         self.object_list.append(cube)
+        self.glWidget.setObjList(self.object_list)
+        f = open('cache','wb')
+        pickle.dump(self.object_list, f)
+        f.close()
         # QListWidgetItem(cube.name, self.listWidget)
         print(item.text())
 
@@ -301,6 +254,12 @@ class Widget(QWidget):
         item.setData(QtCore.Qt.UserRole, sphere)
 
         self.object_list.append(sphere)
+        self.glWidget.setObjList(self.object_list)
+
+        f = open('cache','wb')
+        pickle.dump(self.object_list, f)
+        f.close()
+        
         # QListWidgetItem(sphere.name, self.listWidget)
         print(item.text())
 
@@ -310,6 +269,11 @@ class Widget(QWidget):
         try:
             row = self.listWidget.row(self.current_item)
             del self.object_list[row]
+            self.glWidget.setObjList(self.object_list)
+            f = open('cache','wb')
+            for obj in self.object_list:
+                pickle.dump(obj, f)
+            f.close()
             self.listWidget.takeItem(row)
         except:
             print("Delete error.")
@@ -344,6 +308,11 @@ class Widget(QWidget):
             try:
                 self.current_object.set_name(self.name.text())
                 self.current_item.setText(self.name.text())
+                self.glWidget.setObjList(self.object_list)
+                f = open('cache','wb')
+                for obj in self.object_list:
+                    pickle.dump(obj, f)
+                f.close()
             except:
                 print("Name change error")
 
@@ -363,6 +332,11 @@ class Widget(QWidget):
                     print('here')
                     li.append(0)
                 self.current_object.set_position(li)
+                self.glWidget.setObjList(self.object_list)
+                f = open('cache','wb')
+                for obj in self.object_list:
+                    pickle.dump(obj, f)
+                f.close()
             except:
                 print("invalid input")
             print(self.current_object.get_position())
@@ -384,6 +358,11 @@ class Widget(QWidget):
                     print('here')
                     li.append(0)
                 self.current_object.set_color(li)
+                self.glWidget.setObjList(self.object_list)
+                f = open('cache','wb')
+                for obj in self.object_list:
+                    pickle.dump(obj, f)
+                f.close()
             except:
                 print("invalid input")
             print(self.current_object.get_color())
@@ -405,6 +384,11 @@ class Widget(QWidget):
                     print('here')
                     li.append(0)
                 self.current_object.set_scale(li)
+                self.glWidget.setObjList(self.object_list)
+                f = open('cache','wb')
+                for obj in self.object_list:
+                    pickle.dump(obj, f)
+                f.close()
             except:
                 print("invalid input")
             print(self.current_object.get_scale())
@@ -426,6 +410,11 @@ class Widget(QWidget):
                     print('here')
                     li.append(0)
                 self.current_object.set_rotation(li)
+                self.glWidget.setObjList(self.object_list)
+                f = open('cache','wb')
+                for obj in self.object_list:
+                    pickle.dump(obj, f)
+                f.close()
             except:
                 print("invalid input")
             print(self.current_object.get_rotation())
@@ -447,6 +436,11 @@ class Widget(QWidget):
                     print('here')
                     li.append(0)
                 self.current_object.set_translation(li)
+                self.glWidget.setObjList(self.object_list)
+                f = open('cache','wb')
+                for obj in self.object_list:
+                    pickle.dump(obj, f)
+                f.close()
             except:
                 print("invalid input")
             print(self.current_object.get_translation())
