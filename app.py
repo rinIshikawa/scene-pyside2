@@ -88,18 +88,6 @@ class Widget(QWidget):
         self.items = 0
 
         self.object_list = []
-        try:
-            f = open('cache','rb')
-            self.object_list = pickle.load(f)
-            print(self.object_list)
-            f.close()
-
-            for obj in self.object_list:
-                print(obj)
-        except:
-            print("loading error")
-
-
         self.current_object = None
         self.current_item = None
 
@@ -178,9 +166,22 @@ class Widget(QWidget):
         self.keyDownEvent = QKeyEvent(QKeyEvent.KeyPress, 10, Qt.NoModifier, '', False, 1)
         # self.keyUpEvent = QKeyEvent(QKeyEvent.KeyRelease, 10, Qt.NoModifier, '', False, 1)
 
+        try:
+            f = open('cache','rb')
+            self.object_list = pickle.load(f)
+            print(self.object_list)
+            f.close()
+
+            for obj in self.object_list:
+                item = QListWidgetItem()
+                item.setText(obj.name)
+                self.listWidget.addItem(item)
+                item.setData(QtCore.Qt.UserRole, obj)
+        except:
+            print("loading error")
+            
         self.glWidget.setObjList(self.object_list)
         self.glWidget.updateGL()
-
 
     def keyPressEvent(self, e):
         print("pressed some key")
@@ -271,8 +272,7 @@ class Widget(QWidget):
             del self.object_list[row]
             self.glWidget.setObjList(self.object_list)
             f = open('cache','wb')
-            for obj in self.object_list:
-                pickle.dump(obj, f)
+            pickle.dump(self.object_list, f)
             f.close()
             self.listWidget.takeItem(row)
         except:
@@ -310,8 +310,7 @@ class Widget(QWidget):
                 self.current_item.setText(self.name.text())
                 self.glWidget.setObjList(self.object_list)
                 f = open('cache','wb')
-                for obj in self.object_list:
-                    pickle.dump(obj, f)
+                pickle.dump(self.object_list, f)
                 f.close()
             except:
                 print("Name change error")
@@ -334,8 +333,7 @@ class Widget(QWidget):
                 self.current_object.set_position(li)
                 self.glWidget.setObjList(self.object_list)
                 f = open('cache','wb')
-                for obj in self.object_list:
-                    pickle.dump(obj, f)
+                pickle.dump(self.object_list, f)
                 f.close()
             except:
                 print("invalid input")
@@ -360,8 +358,7 @@ class Widget(QWidget):
                 self.current_object.set_color(li)
                 self.glWidget.setObjList(self.object_list)
                 f = open('cache','wb')
-                for obj in self.object_list:
-                    pickle.dump(obj, f)
+                pickle.dump(self.object_list, f)
                 f.close()
             except:
                 print("invalid input")
@@ -386,8 +383,7 @@ class Widget(QWidget):
                 self.current_object.set_scale(li)
                 self.glWidget.setObjList(self.object_list)
                 f = open('cache','wb')
-                for obj in self.object_list:
-                    pickle.dump(obj, f)
+                pickle.dump(self.object_list, f)
                 f.close()
             except:
                 print("invalid input")
@@ -412,8 +408,7 @@ class Widget(QWidget):
                 self.current_object.set_rotation(li)
                 self.glWidget.setObjList(self.object_list)
                 f = open('cache','wb')
-                for obj in self.object_list:
-                    pickle.dump(obj, f)
+                pickle.dump(self.object_list, f)
                 f.close()
             except:
                 print("invalid input")
@@ -438,8 +433,7 @@ class Widget(QWidget):
                 self.current_object.set_translation(li)
                 self.glWidget.setObjList(self.object_list)
                 f = open('cache','wb')
-                for obj in self.object_list:
-                    pickle.dump(obj, f)
+                pickle.dump(self.object_list, f)
                 f.close()
             except:
                 print("invalid input")
